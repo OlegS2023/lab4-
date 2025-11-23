@@ -83,6 +83,19 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 class Base(DeclarativeBase):
     pass
 
+class ExternalResult(Base):
+    __tablename__ = "external_results"
+
+    id = Column(Integer, primary_key=True, index=True)
+    correlation_id = Column(String, index=True, nullable=False)   # unikalny identyfikator requestu
+    ext_url = Column(String, nullable=False)                      # URL wywołanego API
+    status_code = Column(Integer, nullable=True)                  # kod HTTP odpowiedzi
+    duration_ms = Column(Integer, nullable=True)                  # czas trwania requestu w ms
+    payload_hash = Column(String, nullable=True)                  # hash odpowiedzi (np. SHA256)
+    stored_json = Column(JSON, nullable=True)                     # skrócona odpowiedź w JSON
+    created_at = Column(DateTime, default=datetime.utcnow)        # timestamp zapisu
+
+
 class PredictionLog(Base):
     __tablename__ = "prediction_logs"
     id = Column(Integer, primary_key=True, index=True)
@@ -215,6 +228,59 @@ async def get_logs(limit: int = 20, db: Session = Depends(get_db)):
         } for log in logs]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Błąd odczytu logów: {e}")
+import httpx
+import hashlib
+import uuid
+
+@app.post("/external/fetch")
+async def external_fetch(params: Dict[str, Any] = None, db: Session = Depends(get_db)):
+    correlation_id = str(uuid.uuid4())
+    ext_url = os.environ.get("EXTERNAL_API_BASE_URL", "https://httpbin.org/get")
+
+    start_time = time.time()
+    try:
+        async with httpx.AsyncClient(http2=os.environ.get("OUT_PROTOCOL") == "h2") as client:
+            response = await client.get(ext_url, params=params, timeout=180.0)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        payload_hash = hashlib.sha256(response.content).hexdigest()
+
+        log_entry = ExternalResult(
+            correlation_id=correlation_id,
+            ext_url=ext_url,
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+            payload_hash=payload_hash,
+            stored_json=response.json(),
+        )
+        db.add(log_entry)
+        db.commit()
+        db.refresh(log_entry)
+
+        return {
+            "id": log_entry.id,
+            "ext_status": response.status_code,
+            "duration_ms": duration_ms,
+            "stored": True,
+            "correlation_id": correlation_id,
+        }
+
+    except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        log_entry = ExternalResult(
+            correlation_id=correlation_id,
+            ext_url=ext_url,
+            status_code=None,
+            duration_ms=duration_ms,
+            payload_hash=None,
+            stored_json={"error": str(e)},
+        )
+        db.add(log_entry)
+        db.commit()
+        db.refresh(log_entry)
+
+        raise HTTPException(status_code=500, detail=f"External call failed: {e}")
+    
 
 if __name__ == "__main__":
     import uvicorn
