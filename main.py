@@ -237,12 +237,29 @@ async def external_fetch(params: Dict[str, Any] = None, db: Session = Depends(ge
     correlation_id = str(uuid.uuid4())
     ext_url = os.environ.get("EXTERNAL_API_BASE_URL", "https://httpbin.org/get")
 
+    # Konfiguracja klienta HTTP z env
+    max_connections = int(os.environ.get("OUT_MAX_CONNECTIONS", "100"))
+    pool_timeout = float(os.environ.get("OUT_POOL_TIMEOUT_MS", "1000")) / 1000.0
+    keepalive = int(os.environ.get("OUT_KEEPALIVE", "20"))
+    protocol = os.environ.get("OUT_PROTOCOL", "h1")
+    read_timeout = float(os.environ.get("OUT_READ_TIMEOUT", "180"))
+
+    limits = httpx.Limits(
+        max_connections=max_connections,
+        max_keepalive_connections=keepalive,
+        keepalive_expiry=30.0
+    )
+
     start_time = time.time()
     try:
-        async with httpx.AsyncClient(http2=os.environ.get("OUT_PROTOCOL") == "h2") as client:
-            response = await client.get(ext_url, params=params, timeout=180.0)
-        duration_ms = int((time.time() - start_time) * 1000)
+        async with httpx.AsyncClient(
+            limits=limits,
+            timeout=httpx.Timeout(connect=5.0, read=read_timeout,write=5.0,pool=pool_timeout ),
+            http2=(protocol == "h2")
+        ) as client:
+            response = await client.get(ext_url, params=params)
 
+        duration_ms = int((time.time() - start_time) * 1000)
         payload_hash = hashlib.sha256(response.content).hexdigest()
 
         log_entry = ExternalResult(
@@ -280,7 +297,7 @@ async def external_fetch(params: Dict[str, Any] = None, db: Session = Depends(ge
         db.refresh(log_entry)
 
         raise HTTPException(status_code=500, detail=f"External call failed: {e}")
-    
+
 
 if __name__ == "__main__":
     import uvicorn
