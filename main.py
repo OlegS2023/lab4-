@@ -66,6 +66,22 @@ instrumentator.instrument(app).expose(app)
 # === Logger ===
 logger = logging.getLogger("uvicorn.error")
 
+# === Prometheus custom metrics ===
+from prometheus_client import Counter, Histogram
+
+external_requests_total = Counter(
+    "external_requests_total",
+    "Liczba wywołań external_fetch",
+    ["outcome"]  # etykieta: ok / error
+)
+
+external_request_latency = Histogram(
+    "external_request_latency_ms",
+    "Czas trwania wywołań external_fetch w ms",
+    buckets=[50, 100, 250, 500, 1000, 2000, 5000, 10000]
+)
+
+
 # === Konfiguracja DB ===
 DATABASE_URL_STR = os.environ.get("DATABASE_URL")
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -237,7 +253,6 @@ async def external_fetch(params: Dict[str, Any] = None, db: Session = Depends(ge
     correlation_id = str(uuid.uuid4())
     ext_url = os.environ.get("EXTERNAL_API_BASE_URL", "https://httpbin.org/get")
 
-    # Konfiguracja klienta HTTP z env
     max_connections = int(os.environ.get("OUT_MAX_CONNECTIONS", "100"))
     pool_timeout = float(os.environ.get("OUT_POOL_TIMEOUT_MS", "1000")) / 1000.0
     keepalive = int(os.environ.get("OUT_KEEPALIVE", "20"))
@@ -249,55 +264,73 @@ async def external_fetch(params: Dict[str, Any] = None, db: Session = Depends(ge
         max_keepalive_connections=keepalive,
         keepalive_expiry=30.0
     )
+    timeout = httpx.Timeout(connect=5.0, read=read_timeout, write=5.0, pool=pool_timeout)
 
     start_time = time.time()
-    try:
-        async with httpx.AsyncClient(
-            limits=limits,
-            timeout=httpx.Timeout(connect=5.0, read=read_timeout,write=5.0,pool=pool_timeout ),
-            http2=(protocol == "h2")
-        ) as client:
-            response = await client.get(ext_url, params=params)
+    with tracer.start_as_current_span("external_fetch") as span:
+        span.set_attribute("correlation_id", correlation_id)
+        span.set_attribute("ext_url", ext_url)
+        span.set_attribute("protocol", protocol)
+        span.set_attribute("max_connections", max_connections)
+        span.set_attribute("keepalive", keepalive)
 
-        duration_ms = int((time.time() - start_time) * 1000)
-        payload_hash = hashlib.sha256(response.content).hexdigest()
+        try:
+            async with httpx.AsyncClient(limits=limits, timeout=timeout, http2=(protocol == "h2")) as client:
+                response = await client.get(ext_url, params=params)
 
-        log_entry = ExternalResult(
-            correlation_id=correlation_id,
-            ext_url=ext_url,
-            status_code=response.status_code,
-            duration_ms=duration_ms,
-            payload_hash=payload_hash,
-            stored_json=response.json(),
-        )
-        db.add(log_entry)
-        db.commit()
-        db.refresh(log_entry)
+            duration_ms = int((time.time() - start_time) * 1000)
+            payload_hash = hashlib.sha256(response.content).hexdigest()
 
-        return {
-            "id": log_entry.id,
-            "ext_status": response.status_code,
-            "duration_ms": duration_ms,
-            "stored": True,
-            "correlation_id": correlation_id,
-        }
+            log_entry = ExternalResult(
+                correlation_id=correlation_id,
+                ext_url=ext_url,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+                payload_hash=payload_hash,
+                stored_json=response.json(),
+            )
+            db.add(log_entry)
+            db.commit()
+            db.refresh(log_entry)
 
-    except Exception as e:
-        duration_ms = int((time.time() - start_time) * 1000)
-        log_entry = ExternalResult(
-            correlation_id=correlation_id,
-            ext_url=ext_url,
-            status_code=None,
-            duration_ms=duration_ms,
-            payload_hash=None,
-            stored_json={"error": str(e)},
-        )
-        db.add(log_entry)
-        db.commit()
-        db.refresh(log_entry)
+            # Prometheus metrics
+            external_requests_total.labels(outcome="ok").inc()
+            external_request_latency.observe(duration_ms)
 
-        raise HTTPException(status_code=500, detail=f"External call failed: {e}")
+            trace_id = format(get_current_span().get_span_context().trace_id, "032x")
+            logger.info(f"External call OK, trace_id={trace_id}, correlation_id={correlation_id}")
 
+            return {
+                "id": log_entry.id,
+                "ext_status": response.status_code,
+                "duration_ms": duration_ms,
+                "stored": True,
+                "correlation_id": correlation_id,
+                "trace_id": trace_id,
+            }
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            log_entry = ExternalResult(
+                correlation_id=correlation_id,
+                ext_url=ext_url,
+                status_code=None,
+                duration_ms=duration_ms,
+                payload_hash=None,
+                stored_json={"error": str(e)},
+            )
+            db.add(log_entry)
+            db.commit()
+            db.refresh(log_entry)
+
+            # Prometheus metrics
+            external_requests_total.labels(outcome="error").inc()
+            external_request_latency.observe(duration_ms)
+
+            trace_id = format(get_current_span().get_span_context().trace_id, "032x")
+            logger.error(f"External call FAILED, trace_id={trace_id}, correlation_id={correlation_id}, error={e}")
+
+            raise HTTPException(status_code=500, detail=f"External call failed: {e}")
 
 if __name__ == "__main__":
     import uvicorn
