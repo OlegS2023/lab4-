@@ -31,8 +31,8 @@ cd ./tests/k6
 
 ### Spike Load
 ![Spike RPS](grafanatests/01-spike-rps.png)  
-![Spike Error %](docs/load-tests/01-spike-error.png)  
-![Spike Latency p95](docs/load-tests/01-spike-latency.png)
+![Spike Error %](grafanatests/01-spike-error.png)  
+![Spike Latency p95](grafanatests/01-spike-latency.png)
 
 **Setup:** 200 RPS, 45s, HTTP/1.1, maxconn=100, keepalive=20.  
 **Findings:**  
