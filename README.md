@@ -30,6 +30,8 @@ cd ./tests/k6
 ## 4. Experiments
 
 ### Spike Load
+<img width="1028" height="549" alt="image" src="https://github.com/user-attachments/assets/b8692d97-c8b4-4490-a069-eee9f23f4aae" />
+
 ![Spike RPS](grafanatests/01-spike-rps.png)  
 ![Spike Error %](grafanatests/01-spike-error.png)  
 ![Spike Latency p95](grafanatests/01-spike-latency.png)
