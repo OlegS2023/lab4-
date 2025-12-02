@@ -30,7 +30,7 @@ cd ./tests/k6
 ## 4. Experiments
 
 ### Spike Load
-![Spike RPS](grafanatests\01-spike-rps.png)  
+![Spike RPS](grafanatests/01-spike-rps.png)  
 ![Spike Error %](docs/load-tests/01-spike-error.png)  
 ![Spike Latency p95](docs/load-tests/01-spike-latency.png)
 
