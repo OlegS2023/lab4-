@@ -32,8 +32,14 @@ cd ./tests/k6
 ### 4. Experiments
 
 ### Spike Load
+<<<<<<< HEAD
 ![Spike RPS](grafanatests/01-spike-rps.png)  
 
+=======
+![Spike RPS](lab4-/grafanatests/01-spike-rps.png)  
+![Spike Error %](docs/load-tests/01-spike-error.png)  
+![Spike Latency p95](docs/load-tests/01-spike-latency.png)
+>>>>>>> d2b6e2e20f8908750b37b53efc9d5a495a52cc43
 
 **Setup:** 200 RPS, 45s, HTTP/1.1, maxconn=100, keepalive=20.  
 **Findings:**  
@@ -141,3 +147,11 @@ This experiment compares two transport protocols under identical load conditions
 HTTP/2 outperforms HTTP/1.1 in terms of throughput and stability. While latency differences are minimal, protocol selection significantly impacts system efficiency under load.
 
 
+<<<<<<< HEAD
+=======
+**Setup:** Artificial database slowdown.  
+**Findings:**  
+- Latency increased.  
+- System stayed stable.  
+**Conclusion:** Database slowness impacts latency but does not destabilize system.
+>>>>>>> d2b6e2e20f8908750b37b53efc9d5a495a52cc43
